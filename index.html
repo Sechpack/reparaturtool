@@ -1,0 +1,383 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Reparaturbericht</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      background: #1a1a2e;
+      color: #eee;
+      min-height: 100vh;
+      padding: 16px;
+    }
+    h1 {
+      font-size: 1.3rem;
+      margin-bottom: 16px;
+      color: #4fc3f7;
+      text-align: center;
+    }
+
+    /* ── Status-Zeile ── */
+    #status {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      background: #16213e;
+      border-radius: 8px;
+      padding: 10px 14px;
+      margin-bottom: 14px;
+      font-size: 0.85rem;
+    }
+    #statusDot {
+      width: 10px; height: 10px;
+      border-radius: 50%;
+      background: #555;
+      flex-shrink: 0;
+    }
+    #statusDot.connected  { background: #4caf50; }
+    #statusDot.typing     { background: #ff9800; }
+    #statusDot.error      { background: #f44336; }
+
+    /* ── Eingabe ── */
+    textarea {
+      width: 100%;
+      height: 130px;
+      background: #16213e;
+      border: 1px solid #333;
+      border-radius: 10px;
+      color: #eee;
+      font-size: 1rem;
+      padding: 12px;
+      resize: vertical;
+      outline: none;
+    }
+    textarea:focus { border-color: #4fc3f7; }
+
+    /* ── Buttons ── */
+    .btn-row {
+      display: flex;
+      gap: 10px;
+      margin-top: 10px;
+    }
+    button {
+      flex: 1;
+      padding: 13px 8px;
+      border: none;
+      border-radius: 10px;
+      font-size: 1rem;
+      font-weight: 600;
+      cursor: pointer;
+      transition: opacity .15s, transform .1s;
+    }
+    button:active { transform: scale(0.97); }
+    button:disabled { opacity: 0.4; cursor: default; }
+
+    #btnMic    { background: #e91e63; color: #fff; }
+    #btnMic.recording { background: #ff5252; animation: pulse 1s infinite; }
+    #btnFormat { background: #4fc3f7; color: #1a1a2e; }
+    #btnBle    { background: #4caf50; color: #fff; }
+    #btnSend   { background: #ff9800; color: #fff; }
+
+    @keyframes pulse {
+      0%,100% { opacity: 1; }
+      50%      { opacity: .6; }
+    }
+
+    /* ── Vorschau ── */
+    #preview {
+      background: #16213e;
+      border: 1px solid #333;
+      border-radius: 10px;
+      padding: 12px;
+      margin-top: 14px;
+      font-size: 0.9rem;
+      white-space: pre-wrap;
+      min-height: 60px;
+      color: #b0e0ff;
+      display: none;
+    }
+    #preview.visible { display: block; }
+
+    /* ── API-Key Feld ── */
+    #apiSection {
+      background: #16213e;
+      border-radius: 10px;
+      padding: 12px;
+      margin-bottom: 14px;
+    }
+    #apiSection label { font-size: 0.8rem; color: #888; display: block; margin-bottom: 6px; }
+    #apiKey {
+      width: 100%;
+      background: #0f3460;
+      border: 1px solid #333;
+      border-radius: 8px;
+      color: #eee;
+      font-size: 0.85rem;
+      padding: 8px 10px;
+      outline: none;
+    }
+  </style>
+</head>
+<body>
+  <h1>Reparaturbericht-Tool</h1>
+
+  <!-- API Key -->
+  <div id="apiSection">
+    <label>Claude API-Key (einmalig eingeben — wird lokal gespeichert)</label>
+    <input type="password" id="apiKey" placeholder="sk-ant-..." autocomplete="off">
+  </div>
+
+  <!-- Status -->
+  <div id="status">
+    <div id="statusDot"></div>
+    <span id="statusText">Nicht verbunden</span>
+  </div>
+
+  <!-- Texteingabe -->
+  <textarea id="input" placeholder="Fehler, Ursache und Maßnahmen beschreiben... (oder Mikrofon nutzen)"></textarea>
+
+  <div class="btn-row">
+    <button id="btnMic">🎙 Sprechen</button>
+    <button id="btnFormat" disabled>✨ Formatieren</button>
+  </div>
+
+  <!-- Vorschau formatierter Bericht -->
+  <div id="preview"></div>
+
+  <div class="btn-row" style="margin-top:10px">
+    <button id="btnBle">📡 BLE verbinden</button>
+    <button id="btnSend" disabled>📤 Senden</button>
+  </div>
+
+<script>
+// ── Konstanten ────────────────────────────────────────────────────────────────
+const SERVICE_UUID   = "12345678-1234-1234-1234-123456789abc";
+const CHAR_TEXT_UUID = "12345678-1234-1234-1234-123456789abd";
+const CHAR_STAT_UUID = "12345678-1234-1234-1234-123456789abe";
+
+const CLAUDE_MODEL = "claude-haiku-4-5-20251001";   // günstigstes Modell
+
+const PROMPT_SYSTEM = `Du bist ein Assistent für Techniker.
+Der Nutzer beschreibt einen Reparaturfall auf Deutsch, oft als Fließtext oder Stichworte.
+Deine Aufgabe: Schreibe daraus einen sauberen, professionellen Reparaturbericht.
+
+Format (genau so, keine Abweichungen):
+REPARATURBERICHT
+================
+Datum: [heutiges Datum automatisch einfügen]
+Fehler/Symptom:
+[präzise Beschreibung des Fehlers oder Symptoms]
+
+Ursache:
+[was die Ursache war]
+
+Durchgeführte Maßnahmen:
+[was repariert/ersetzt/eingestellt wurde]
+
+Ergebnis:
+[Ergebnis nach der Reparatur, z.B. "Gerät läuft wieder einwandfrei"]
+================
+
+Schreibe NUR den Bericht, keinen weiteren Text davor oder danach.
+Falls eine Information fehlt, lasse das Feld leer — erfinde nichts.`;
+
+// ── State ─────────────────────────────────────────────────────────────────────
+let bleDevice    = null;
+let textChar     = null;
+let statusChar   = null;
+let formattedText = "";
+let recognition  = null;
+let isRecording  = false;
+
+// ── DOM ───────────────────────────────────────────────────────────────────────
+const inputEl      = document.getElementById("input");
+const apiKeyEl     = document.getElementById("apiKey");
+const previewEl    = document.getElementById("preview");
+const btnMic       = document.getElementById("btnMic");
+const btnFormat    = document.getElementById("btnFormat");
+const btnBle       = document.getElementById("btnBle");
+const btnSend      = document.getElementById("btnSend");
+const statusDot    = document.getElementById("statusDot");
+const statusText   = document.getElementById("statusText");
+
+// API Key laden
+apiKeyEl.value = localStorage.getItem("claudeApiKey") || "";
+apiKeyEl.addEventListener("change", () =>
+  localStorage.setItem("claudeApiKey", apiKeyEl.value.trim())
+);
+
+// Format-Button aktivieren wenn Text vorhanden
+inputEl.addEventListener("input", () => {
+  btnFormat.disabled = inputEl.value.trim().length < 5;
+});
+
+// ── Status ────────────────────────────────────────────────────────────────────
+function setStatus(text, cls = "") {
+  statusText.textContent = text;
+  statusDot.className    = cls;
+}
+
+// ── Spracheingabe ─────────────────────────────────────────────────────────────
+btnMic.addEventListener("click", () => {
+  if (!("webkitSpeechRecognition" in window) && !("SpeechRecognition" in window)) {
+    alert("Spracheingabe wird in diesem Browser nicht unterstützt.\nNutze Chrome oder Edge.");
+    return;
+  }
+
+  if (isRecording) {
+    recognition && recognition.stop();
+    return;
+  }
+
+  const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+  recognition = new SR();
+  recognition.lang = "de-DE";
+  recognition.continuous = true;
+  recognition.interimResults = false;
+
+  recognition.onstart  = () => { isRecording = true;  btnMic.textContent = "⏹ Stopp"; btnMic.classList.add("recording"); };
+  recognition.onend    = () => { isRecording = false; btnMic.textContent = "🎙 Sprechen"; btnMic.classList.remove("recording"); };
+  recognition.onresult = e => {
+    const t = Array.from(e.results).map(r => r[0].transcript).join(" ");
+    inputEl.value = t;
+    btnFormat.disabled = t.trim().length < 5;
+  };
+  recognition.onerror  = err => { setStatus("Mikrofon-Fehler: " + err.error, "error"); };
+
+  recognition.start();
+});
+
+// ── Claude API ────────────────────────────────────────────────────────────────
+btnFormat.addEventListener("click", async () => {
+  const key = apiKeyEl.value.trim();
+  if (!key) { alert("Bitte Claude API-Key eingeben."); return; }
+
+  const userText = inputEl.value.trim();
+  if (!userText) return;
+
+  btnFormat.disabled = true;
+  btnFormat.textContent = "⏳ Lädt...";
+  setStatus("KI formatiert...", "typing");
+
+  try {
+    const today = new Date().toLocaleDateString("de-DE", { day:"2-digit", month:"2-digit", year:"numeric" });
+    const systemWithDate = PROMPT_SYSTEM.replace("[heutiges Datum automatisch einfügen]", today);
+
+    const res = await fetch("https://api.anthropic.com/v1/messages", {
+      method: "POST",
+      headers: {
+        "Content-Type":      "application/json",
+        "x-api-key":         key,
+        "anthropic-version": "2023-06-01",
+        "anthropic-dangerous-direct-browser-calls": "true"
+      },
+      body: JSON.stringify({
+        model:      CLAUDE_MODEL,
+        max_tokens: 600,
+        system:     systemWithDate,
+        messages:   [{ role: "user", content: userText }]
+      })
+    });
+
+    if (!res.ok) {
+      const err = await res.json();
+      throw new Error(err.error?.message || res.statusText);
+    }
+
+    const data = await res.json();
+    formattedText = data.content[0].text.trim();
+
+    previewEl.textContent = formattedText;
+    previewEl.classList.add("visible");
+    btnSend.disabled = !bleDevice;
+    setStatus("Bericht fertig ✓", bleDevice ? "connected" : "");
+
+  } catch (e) {
+    setStatus("Fehler: " + e.message, "error");
+    console.error(e);
+  } finally {
+    btnFormat.textContent = "✨ Formatieren";
+    btnFormat.disabled = false;
+  }
+});
+
+// ── BLE ───────────────────────────────────────────────────────────────────────
+btnBle.addEventListener("click", async () => {
+  if (bleDevice && bleDevice.gatt.connected) {
+    bleDevice.gatt.disconnect();
+    return;
+  }
+
+  if (!navigator.bluetooth) {
+    alert("Web Bluetooth wird in diesem Browser nicht unterstützt.\nNutze Chrome oder Edge auf Android.");
+    return;
+  }
+
+  setStatus("Suche ESP...", "");
+  try {
+    bleDevice = await navigator.bluetooth.requestDevice({
+      filters: [{ name: "ESP-Reparaturtool" }],
+      optionalServices: [SERVICE_UUID]
+    });
+
+    bleDevice.addEventListener("gattserverdisconnected", () => {
+      setStatus("BLE getrennt", "error");
+      statusDot.className = "error";
+      btnBle.textContent = "📡 BLE verbinden";
+      btnSend.disabled = true;
+    });
+
+    const server  = await bleDevice.gatt.connect();
+    const service = await server.getPrimaryService(SERVICE_UUID);
+    textChar      = await service.getCharacteristic(CHAR_TEXT_UUID);
+    statusChar    = await service.getCharacteristic(CHAR_STAT_UUID);
+
+    // Status-Notifications empfangen
+    await statusChar.startNotifications();
+    statusChar.addEventListener("characteristicvaluechanged", e => {
+      const val = new TextDecoder().decode(e.target.value);
+      const msgs = { READY:"Bereit — Button drücken", TYPING:"ESP tippt...", DONE:"Erledigt ✓", NO_TEXT:"Kein Text auf ESP" };
+      setStatus(msgs[val] || val, val === "DONE" ? "connected" : val === "TYPING" ? "typing" : "connected");
+    });
+
+    setStatus("Verbunden mit ESP ✓", "connected");
+    btnBle.textContent = "❌ Trennen";
+    if (formattedText) btnSend.disabled = false;
+
+  } catch (e) {
+    setStatus("BLE Fehler: " + e.message, "error");
+    bleDevice = null;
+  }
+});
+
+// ── Senden ────────────────────────────────────────────────────────────────────
+btnSend.addEventListener("click", async () => {
+  if (!textChar || !formattedText) return;
+
+  btnSend.disabled = true;
+  setStatus("Sende an ESP...", "typing");
+
+  try {
+    // Text in 512-Byte-Chunks senden (BLE MTU-Limit)
+    const encoder = new TextEncoder();
+    const bytes   = encoder.encode(formattedText);
+    const CHUNK   = 512;
+
+    for (let i = 0; i < bytes.length; i += CHUNK) {
+      await textChar.writeValueWithoutResponse(bytes.slice(i, i + CHUNK));
+      await new Promise(r => setTimeout(r, 50));
+    }
+
+    setStatus("Gesendet ✓ — Button am ESP drücken", "connected");
+  } catch (e) {
+    setStatus("Sende-Fehler: " + e.message, "error");
+  } finally {
+    btnSend.disabled = false;
+  }
+});
+</script>
+</body>
+</html>
