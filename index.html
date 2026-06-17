@@ -8,12 +8,10 @@
     * { box-sizing: border-box; margin: 0; padding: 0; }
     body {
       font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-      background: #1a1a2e;
-      color: #eee;
-      min-height: 100vh;
-      padding: 16px;
+      background: #1a1a2e; color: #eee; min-height: 100vh; padding: 16px;
     }
-    h1 { font-size: 1.3rem; margin-bottom: 16px; color: #4fc3f7; text-align: center; }
+    h1 { font-size: 1.3rem; margin-bottom: 6px; color: #4fc3f7; text-align: center; }
+    .sub { text-align: center; font-size: 0.78rem; color: #888; margin-bottom: 16px; }
 
     #status {
       display: flex; align-items: center; gap: 8px;
@@ -25,10 +23,13 @@
     #statusDot.typing    { background: #ff9800; }
     #statusDot.error     { background: #f44336; }
 
+    .label { font-size: 0.8rem; color: #4fc3f7; margin: 4px 2px 6px; }
+
     textarea {
-      width: 100%; height: 130px;
+      width: 100%; height: 200px;
       background: #16213e; border: 1px solid #333; border-radius: 10px;
       color: #eee; font-size: 1rem; padding: 12px; resize: vertical; outline: none;
+      white-space: pre-wrap;
     }
     textarea:focus { border-color: #4fc3f7; }
 
@@ -40,47 +41,19 @@
     button:active { transform: scale(0.97); }
     button:disabled { opacity: 0.4; cursor: default; }
 
-    #btnMic    { background: #e91e63; color: #fff; }
-    #btnMic.recording { background: #ff5252; animation: pulse 1s infinite; }
-    #btnFormat { background: #4fc3f7; color: #1a1a2e; }
+    #btnTemplate { background: #9c27b0; color: #fff; width: 100%; margin-bottom: 14px; }
+    #btnPaste  { background: #607d8b; color: #fff; }
+    #btnClear  { background: #455a64; color: #fff; }
     #btnBle    { background: #4caf50; color: #fff; }
     #btnSend   { background: #ff9800; color: #fff; }
-    #btnLoadAI { background: #9c27b0; color: #fff; width: 100%; margin-bottom: 14px; }
-
-    @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: .6; } }
-
-    #preview {
-      background: #16213e; border: 1px solid #333; border-radius: 10px;
-      padding: 12px; margin-top: 14px; font-size: 0.9rem; white-space: pre-wrap;
-      min-height: 60px; color: #b0e0ff; display: none;
-    }
-    #preview.visible { display: block; }
-
-    /* Modell-Lade-Box */
-    #aiBox {
-      background: #16213e; border-radius: 10px; padding: 12px; margin-bottom: 14px;
-    }
-    #aiInfo { font-size: 0.8rem; color: #888; margin-bottom: 8px; }
-    #aiProgress {
-      font-size: 0.8rem; color: #ce93d8; margin-top: 8px; display: none;
-    }
-    #progBar {
-      width: 100%; height: 6px; background: #0f3460; border-radius: 3px;
-      margin-top: 6px; overflow: hidden; display: none;
-    }
-    #progFill { height: 100%; width: 0%; background: #9c27b0; transition: width .3s; }
   </style>
 </head>
 <body>
-  <h1>Reparaturbericht-Tool</h1>
+  <h1>Reparaturbericht → PC</h1>
+  <div class="sub">Bericht aus AI Edge Gallery einfügen und an den ESP senden</div>
 
-  <!-- KI laden -->
-  <div id="aiBox">
-    <div id="aiInfo">KI läuft komplett auf deinem Handy — kein Internet nötig (nach dem ersten Laden). Erster Download ca. 1 GB, am besten im WLAN.</div>
-    <button id="btnLoadAI">🧠 KI laden</button>
-    <div id="aiProgress">Lädt...</div>
-    <div id="progBar"><div id="progFill"></div></div>
-  </div>
+  <!-- Vorlage für die Gallery -->
+  <button id="btnTemplate">📋 KI-Vorlage kopieren (für AI Edge Gallery)</button>
 
   <!-- Status -->
   <div id="status">
@@ -88,186 +61,85 @@
     <span id="statusText">Nicht verbunden</span>
   </div>
 
-  <!-- Texteingabe -->
-  <textarea id="input" placeholder="Fehler, Ursache und Maßnahmen beschreiben... (oder Mikrofon nutzen)"></textarea>
+  <!-- Bericht einfügen -->
+  <div class="label">Fertiger Bericht (hier einfügen):</div>
+  <textarea id="report" placeholder="Bericht aus der AI Edge Gallery hier einfügen..."></textarea>
 
   <div class="btn-row">
-    <button id="btnMic">🎙 Sprechen</button>
-    <button id="btnFormat" disabled>✨ Formatieren</button>
+    <button id="btnPaste">📥 Einfügen</button>
+    <button id="btnClear">🗑 Leeren</button>
   </div>
-
-  <div id="preview"></div>
 
   <div class="btn-row" style="margin-top:10px">
     <button id="btnBle">📡 BLE verbinden</button>
-    <button id="btnSend" disabled>📤 Senden</button>
+    <button id="btnSend" disabled>📤 An PC senden</button>
   </div>
 
-<script type="module">
-import * as webllm from "https://esm.run/@mlc-ai/web-llm";
-
+<script>
 // ── Konstanten ──────────────────────────────────────────────────────────────
 const SERVICE_UUID   = "12345678-1234-1234-1234-123456789abc";
 const CHAR_TEXT_UUID = "12345678-1234-1234-1234-123456789abd";
 const CHAR_STAT_UUID = "12345678-1234-1234-1234-123456789abe";
 
-const MODEL_ID = "Qwen2.5-1.5B-Instruct-q4f16_1-MLC";  // ~1 GB, läuft stabil auf Handy-GPU
-
-const SYSTEM_PROMPT = `Du bist ein Assistent für Techniker.
-Der Nutzer beschreibt einen Reparaturfall auf Deutsch, oft als Stichworte.
-Schreibe daraus einen sauberen Reparaturbericht in genau diesem Format:
+// Vorlage, die in die AI Edge Gallery kopiert wird
+const TEMPLATE =
+`Schreibe aus den folgenden Stichworten einen Reparaturbericht in GENAU diesem Format. Schreibe nur den Bericht, sonst nichts:
 
 REPARATURBERICHT
 ================
-Datum: {DATUM}
+Datum: ${new Date().toLocaleDateString("de-DE")}
 Fehler/Symptom:
-[Beschreibung]
-
 Ursache:
-[Ursache]
-
 Durchgeführte Maßnahmen:
-[Maßnahmen]
-
 Ergebnis:
-[Ergebnis]
 ================
 
-Schreibe NUR den Bericht, keinen weiteren Text. Erfinde nichts dazu.`;
+Stichworte:
+`;
 
 // ── State ───────────────────────────────────────────────────────────────────
-let engine       = null;
-let aiReady      = false;
-let bleDevice    = null;
-let textChar     = null;
-let statusChar   = null;
-let formattedText = "";
-let recognition  = null;
-let isRecording  = false;
+let bleDevice  = null;
+let textChar   = null;
+let statusChar = null;
 
 // ── DOM ─────────────────────────────────────────────────────────────────────
-const inputEl    = document.getElementById("input");
-const previewEl  = document.getElementById("preview");
-const btnLoadAI  = document.getElementById("btnLoadAI");
-const aiProgress = document.getElementById("aiProgress");
-const progBar    = document.getElementById("progBar");
-const progFill   = document.getElementById("progFill");
-const btnMic     = document.getElementById("btnMic");
-const btnFormat  = document.getElementById("btnFormat");
+const reportEl   = document.getElementById("report");
+const btnTemplate= document.getElementById("btnTemplate");
+const btnPaste   = document.getElementById("btnPaste");
+const btnClear   = document.getElementById("btnClear");
 const btnBle     = document.getElementById("btnBle");
 const btnSend    = document.getElementById("btnSend");
 const statusDot  = document.getElementById("statusDot");
 const statusText = document.getElementById("statusText");
 
 function setStatus(text, cls = "") { statusText.textContent = text; statusDot.className = cls; }
-function updateFormatBtn() {
-  btnFormat.disabled = !(aiReady && inputEl.value.trim().length >= 5);
-}
-inputEl.addEventListener("input", updateFormatBtn);
+function updateSend() { btnSend.disabled = !(bleDevice && bleDevice.gatt.connected && reportEl.value.trim()); }
+reportEl.addEventListener("input", updateSend);
 
-// ── KI laden ─────────────────────────────────────────────────────────────────
-btnLoadAI.addEventListener("click", async () => {
-  if (aiReady) return;
-  btnLoadAI.disabled = true;
-  aiProgress.style.display = "block";
-  progBar.style.display = "block";
-
+// ── Vorlage kopieren ──────────────────────────────────────────────────────────
+btnTemplate.addEventListener("click", async () => {
   try {
-    engine = await webllm.CreateMLCEngine(MODEL_ID, {
-      initProgressCallback: (p) => {
-        aiProgress.textContent = p.text;
-        if (typeof p.progress === "number") {
-          progFill.style.width = Math.round(p.progress * 100) + "%";
-        }
-      }
-    });
-    aiReady = true;
-    btnLoadAI.textContent = "✅ KI bereit";
-    aiProgress.textContent = "KI geladen — bereit.";
-    progFill.style.width = "100%";
-    updateFormatBtn();
+    await navigator.clipboard.writeText(TEMPLATE);
+    btnTemplate.textContent = "✅ Vorlage kopiert — in Gallery einfügen";
+    setTimeout(() => btnTemplate.textContent = "📋 KI-Vorlage kopieren (für AI Edge Gallery)", 2500);
   } catch (e) {
-    aiProgress.textContent = "Fehler beim Laden: " + e.message;
-    btnLoadAI.disabled = false;
-    if (String(e.message).includes("WebGPU")) {
-      aiProgress.textContent = "Dein Browser unterstützt WebGPU nicht. Nutze aktuelles Chrome auf Android.";
-    }
+    // Fallback: in das Feld schreiben, damit man es markieren/kopieren kann
+    reportEl.value = TEMPLATE;
+    alert("Kopieren nicht erlaubt — Vorlage steht jetzt im Feld, dort markieren und kopieren.");
   }
 });
 
-// ── Spracheingabe ─────────────────────────────────────────────────────────────
-btnMic.addEventListener("click", () => {
-  if (!("webkitSpeechRecognition" in window) && !("SpeechRecognition" in window)) {
-    alert("Spracheingabe wird in diesem Browser nicht unterstützt.\nNutze Chrome.");
-    return;
-  }
-  if (isRecording) { recognition && recognition.stop(); return; }
-
-  const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
-  recognition = new SR();
-  recognition.lang = "de-DE";
-  recognition.continuous = true;
-  recognition.interimResults = false;
-
-  recognition.onstart  = () => { isRecording = true;  btnMic.textContent = "⏹ Stopp"; btnMic.classList.add("recording"); };
-  recognition.onend    = () => { isRecording = false; btnMic.textContent = "🎙 Sprechen"; btnMic.classList.remove("recording"); };
-  recognition.onresult = e => {
-    inputEl.value = Array.from(e.results).map(r => r[0].transcript).join(" ");
-    updateFormatBtn();
-  };
-  recognition.onerror  = err => setStatus("Mikrofon-Fehler: " + err.error, "error");
-  recognition.start();
-});
-
-// ── Formatieren (lokale KI) ───────────────────────────────────────────────────
-btnFormat.addEventListener("click", async () => {
-  if (!aiReady) return;
-  const userText = inputEl.value.trim();
-  if (!userText) return;
-
-  btnFormat.disabled = true;
-  btnFormat.textContent = "⏳ Schreibt...";
-  setStatus("KI formatiert...", "typing");
-
+// ── Einfügen / Leeren ─────────────────────────────────────────────────────────
+btnPaste.addEventListener("click", async () => {
   try {
-    const today = new Date().toLocaleDateString("de-DE", { day:"2-digit", month:"2-digit", year:"numeric" });
-    const system = SYSTEM_PROMPT.replace("{DATUM}", today);
-
-    const req = {
-      temperature: 0.3,
-      max_tokens: 600,
-      messages: [
-        { role: "system", content: system },
-        { role: "user",   content: userText }
-      ]
-    };
-
-    let reply;
-    try {
-      reply = await engine.chat.completions.create(req);
-    } catch (err) {
-      // Manche Handys verlieren das geladene Modell — dann neu laden und nochmal
-      if (String(err.message).toLowerCase().includes("not loaded")) {
-        setStatus("Lade Modell neu...", "typing");
-        await engine.reload(MODEL_ID);
-        reply = await engine.chat.completions.create(req);
-      } else {
-        throw err;
-      }
-    }
-
-    formattedText = reply.choices[0].message.content.trim();
-    previewEl.textContent = formattedText;
-    previewEl.classList.add("visible");
-    btnSend.disabled = !bleDevice;
-    setStatus("Bericht fertig ✓", bleDevice ? "connected" : "");
+    const txt = await navigator.clipboard.readText();
+    if (txt) { reportEl.value = txt; updateSend(); }
   } catch (e) {
-    setStatus("Fehler: " + e.message, "error");
-  } finally {
-    btnFormat.textContent = "✨ Formatieren";
-    updateFormatBtn();
+    reportEl.focus();
+    setStatus("Bitte manuell einfügen (lange tippen → Einfügen)", "");
   }
 });
+btnClear.addEventListener("click", () => { reportEl.value = ""; updateSend(); });
 
 // ── BLE ───────────────────────────────────────────────────────────────────────
 btnBle.addEventListener("click", async () => {
@@ -285,7 +157,7 @@ btnBle.addEventListener("click", async () => {
     bleDevice.addEventListener("gattserverdisconnected", () => {
       setStatus("BLE getrennt", "error");
       btnBle.textContent = "📡 BLE verbinden";
-      btnSend.disabled = true;
+      updateSend();
     });
     const server  = await bleDevice.gatt.connect();
     const service = await server.getPrimaryService(SERVICE_UUID);
@@ -295,13 +167,13 @@ btnBle.addEventListener("click", async () => {
     await statusChar.startNotifications();
     statusChar.addEventListener("characteristicvaluechanged", e => {
       const val = new TextDecoder().decode(e.target.value);
-      const msgs = { READY:"Bereit — Button drücken", TYPING:"ESP tippt...", DONE:"Erledigt ✓", NO_TEXT:"Kein Text auf ESP" };
+      const msgs = { READY:"Bereit — Button am ESP drücken", TYPING:"ESP tippt...", DONE:"Erledigt ✓", NO_TEXT:"Kein Text auf ESP" };
       setStatus(msgs[val] || val, val === "TYPING" ? "typing" : "connected");
     });
 
     setStatus("Verbunden mit ESP ✓", "connected");
     btnBle.textContent = "❌ Trennen";
-    if (formattedText) btnSend.disabled = false;
+    updateSend();
   } catch (e) {
     setStatus("BLE Fehler: " + e.message, "error");
     bleDevice = null;
@@ -310,11 +182,12 @@ btnBle.addEventListener("click", async () => {
 
 // ── Senden ────────────────────────────────────────────────────────────────────
 btnSend.addEventListener("click", async () => {
-  if (!textChar || !formattedText) return;
+  const text = reportEl.value.trim();
+  if (!textChar || !text) return;
   btnSend.disabled = true;
   setStatus("Sende an ESP...", "typing");
   try {
-    const bytes = new TextEncoder().encode(formattedText);
+    const bytes = new TextEncoder().encode(text);
     const CHUNK = 512;
     for (let i = 0; i < bytes.length; i += CHUNK) {
       await textChar.writeValueWithoutResponse(bytes.slice(i, i + CHUNK));
@@ -324,7 +197,7 @@ btnSend.addEventListener("click", async () => {
   } catch (e) {
     setStatus("Sende-Fehler: " + e.message, "error");
   } finally {
-    btnSend.disabled = false;
+    updateSend();
   }
 });
 </script>
